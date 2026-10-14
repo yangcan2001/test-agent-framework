@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .gates import GateConfig, StepBudget, TaskGate
+from .memory import Memory
 from .planner import Planner
 from .react import ReActRunner
 from .reflection import Reflector
@@ -37,10 +38,12 @@ class TestAgent:
         registry: SkillRegistry,
         executors: dict[SkillKind, Executor],
         config: GateConfig | None = None,
+        memory: Memory | None = None,
     ) -> None:
         self._config = config or GateConfig()
-        self._planner = Planner(llm, registry)
-        self._react = ReActRunner(registry, executors, llm, Reflector(llm))
+        self._memory = memory
+        self._planner = Planner(llm, registry, memory)
+        self._react = ReActRunner(registry, executors, llm, Reflector(llm, memory=memory))
 
     def run(self, requirement: str, document_kind: str = "text") -> AgentResult:
         capabilities = _DOC_CAPABILITIES.get(document_kind, set())
@@ -58,4 +61,22 @@ class TestAgent:
                 result.status = "aborted"
                 break
 
+        if self._memory is not None:
+            self._writeback(requirement, result)
         return result
+
+    def _writeback(self, requirement: str, result: AgentResult) -> None:
+        """任务结束把结果沉淀进长期记忆：失败步骤记缺陷，通过步骤记用例。"""
+        for s in result.steps:
+            if s.status in ("failed", "aborted"):
+                self._memory.remember(
+                    "defect",
+                    f"{s.step.skill_id}｜{s.final.detail}",
+                    {"requirement": requirement, "skill": s.step.skill_id, "attempts": s.attempts},
+                )
+            elif s.status == "ok":
+                self._memory.remember(
+                    "case",
+                    f"{s.step.skill_id}｜{s.step.goal or requirement}",
+                    {"requirement": requirement, "skill": s.step.skill_id, "attempts": s.attempts},
+                )

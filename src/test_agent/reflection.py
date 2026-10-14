@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .memory import Memory
 from .types import Action, ExecOutcome, ExecResult, LLM
 
 _DECIDE_SYSTEM = "你是测试执行决策器。只返回一个词：continue / retry / fix / abort。"
@@ -20,9 +21,15 @@ _DEFAULT_RULES = {
 class Reflector:
     """反思三级降级：模型 → 关键词规则 → 默认决策，保证模型不可用时任务不中断。"""
 
-    def __init__(self, llm: LLM, rules: dict[str, Action] | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLM,
+        rules: dict[str, Action] | None = None,
+        memory: Memory | None = None,
+    ) -> None:
         self._llm = llm
         self._rules = rules or _DEFAULT_RULES
+        self._memory = memory
 
     def decide(self, step_goal: str, result: ExecResult) -> Action:
         try:
@@ -31,10 +38,16 @@ class Reflector:
             return self._rule_decide(result)
 
     def _model_decide(self, step_goal: str, result: ExecResult) -> Action:
+        user = f"步骤目标：{step_goal}\n执行结果：{result.outcome.value} {result.detail}"
+        if self._memory is not None:
+            defects = self._memory.recall_defects(f"{step_goal} {result.detail}")
+            if defects:
+                lines = "\n".join(f"- {d.content}" for d in defects)
+                user += f"\n相似历史缺陷（参考）：\n{lines}"
         raw = self._llm.complete(
             [
                 {"role": "system", "content": _DECIDE_SYSTEM},
-                {"role": "user", "content": f"步骤目标：{step_goal}\n执行结果：{result.outcome.value} {result.detail}"},
+                {"role": "user", "content": user},
             ]
         )
         return self._parse(raw)

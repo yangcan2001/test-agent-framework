@@ -3,6 +3,7 @@ import json
 from test_agent.agent import TestAgent
 from test_agent.gates import GateConfig
 from test_agent.llm import FakeLLM
+from test_agent.memory import Memory
 from test_agent.skills import Skill, SkillRegistry
 from test_agent.types import ExecOutcome, ExecResult, SkillKind
 
@@ -47,7 +48,12 @@ def main():
         return ExecResult(ExecOutcome.OK, "status=200")
 
     executors = {SkillKind.PURE: StubExecutor(runner), SkillKind.API: StubExecutor(runner)}
-    agent = TestAgent(llm, reg, executors, GateConfig(step_retry_budget=2))
+
+    # 记忆层：预置一条历史用例，规划时会召回；任务结束自动沉淀 case/defect
+    mem = Memory()
+    mem.remember("case", "订单接口 GET /orders/{id} 校验 200 与返回结构")
+
+    agent = TestAgent(llm, reg, executors, GateConfig(step_retry_budget=2), memory=mem)
 
     result = agent.run("对订单接口做一次冒烟测试", "openapi")
 
@@ -55,6 +61,7 @@ def main():
     for s in result.steps:
         print(f"  step {s.step.index} {s.step.skill_id}: {s.status} (attempts={s.attempts})")
     print("trace entries:", len(result.trace.dump()))
+    print("memory items:", [(i.kind, i.content) for i in mem.store.all()])
 
 
 if __name__ == "__main__":
